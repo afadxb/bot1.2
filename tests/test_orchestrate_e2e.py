@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from pathlib import Path
 
 from datetime import date
@@ -93,6 +94,12 @@ def _sample_csv(path: Path) -> None:
     df.to_csv(path, index=False)
 
 
+def _fetch_rows(conn: sqlite3.Connection, query: str) -> list[dict[str, object]]:
+    cursor = conn.execute(query)
+    columns = [desc[0] for desc in cursor.description]
+    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
 def test_orchestrate_end_to_end(tmp_path, monkeypatch):
     csv_path = tmp_path / "finviz.csv"
     _sample_csv(csv_path)
@@ -121,24 +128,44 @@ def test_orchestrate_end_to_end(tmp_path, monkeypatch):
     assert code == 0
     out_dir = out_base / run_date.isoformat()
     rejection_path = csv_path.with_name("finviz_reject.csv")
-    assert (out_dir / "full_watchlist.json").exists()
-    assert (out_dir / "topN.json").exists()
-    assert (out_dir / "watchlist.csv").exists()
-    assert (out_dir / "run_summary.json").exists()
+    db_path = out_dir / "watchlist.db"
+    assert db_path.exists()
     assert rejection_path.exists()
 
-    topn = json.loads((out_dir / "topN.json").read_text())
-    assert topn["top_n"] == 2
-    assert len(topn["symbols"]) == 2
+    conn = sqlite3.connect(db_path)
+    watchlist_rows = _fetch_rows(conn, "SELECT * FROM watchlist")
+    assert watchlist_rows
+    assert "Why" in watchlist_rows[0]
+    assert "TopFeature5" in watchlist_rows[0]
+    assert "AIConfidence" in watchlist_rows[0]
+    assert float(watchlist_rows[0]["AIConfidence"]) >= 0.0
 
-    watchlist_df = pd.read_csv(out_dir / "watchlist.csv")
-    assert "Why" in watchlist_df.columns
-    assert "TopFeature5" in watchlist_df.columns
+    topn_rows = _fetch_rows(conn, "SELECT * FROM top_rankings")
+    assert len(topn_rows) == 2
+    assert "ai_confidence" in topn_rows[0]
 
-    run_summary = json.loads((out_dir / "run_summary.json").read_text())
+    metadata_rows = _fetch_rows(conn, "SELECT * FROM metadata")
+    assert int(metadata_rows[0]["top_n"]) == 2
+    insights = json.loads(metadata_rows[0]["insights"])
+    assert "news" in insights
+    assert "ai_confidence" in insights
+    assert "sector_focus" in insights
+
+    run_summary_rows = _fetch_rows(conn, "SELECT * FROM run_summary")
+    run_summary = json.loads(run_summary_rows[0]["payload"])
     assert run_summary["row_counts"]["topN"] == 2
     assert "csv_hash" in run_summary
     assert run_summary["env_overrides_used"] == sorted(params.env_overrides)
+    assert "news_signal" in run_summary
+
+    full_watchlist_rows = _fetch_rows(conn, "SELECT * FROM full_watchlist")
+    assert full_watchlist_rows
+    assert "ai_confidence" in full_watchlist_rows[0]
+
+    rejections_rows = _fetch_rows(conn, "SELECT * FROM rejections")
+    if rejections_rows:
+        assert "rejection_reasons" in rejections_rows[0]
+    conn.close()
 
     rejected_df = pd.read_csv(rejection_path)
     assert "ticker" in rejected_df.columns
@@ -173,15 +200,22 @@ def test_run_emits_empty_outputs_when_download_fails(tmp_path, monkeypatch):
     assert exit_code == 0
 
     out_dir = out_base / run_date.isoformat()
-    assert (out_dir / "full_watchlist.json").exists()
-    assert (out_dir / "topN.json").exists()
-    assert (out_dir / "watchlist.csv").exists()
-    assert (out_dir / "run_summary.json").exists()
+    db_path = out_dir / "watchlist.db"
+    assert db_path.exists()
 
-    topn = json.loads((out_dir / "topN.json").read_text())
-    assert topn["symbols"] == []
+    conn = sqlite3.connect(db_path)
 
-    summary = json.loads((out_dir / "run_summary.json").read_text())
+    watchlist_rows = _fetch_rows(conn, "SELECT * FROM watchlist")
+    assert watchlist_rows == []
+
+    topn_rows = _fetch_rows(conn, "SELECT * FROM top_rankings")
+    assert topn_rows == []
+
+    summary_rows = _fetch_rows(conn, "SELECT * FROM run_summary")
+    assert len(summary_rows) == 1
+    summary = json.loads(summary_rows[0]["payload"])
+    conn.close()
+
     assert summary["row_counts"] == {"raw": 0, "qualified": 0, "rejected": 0, "topN": 0}
     assert "download_failed_no_cache" in summary["notes"]
     assert summary["used_cached_csv"] is False
