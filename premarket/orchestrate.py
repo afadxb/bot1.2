@@ -156,6 +156,7 @@ class RunParams:
     config_path: Path
     run_date: date
     output_base_dir: Path = field(default_factory=lambda: Path("data/watchlists"))
+    watchlist_db_path: Optional[Path] = None
     top_n: Optional[int] = None
     use_cache: bool = True
     news_override: Optional[bool] = None
@@ -170,6 +171,8 @@ class RunParams:
             self.config_path = Path(self.config_path)
         if isinstance(self.output_base_dir, str):
             self.output_base_dir = Path(self.output_base_dir)
+        if isinstance(self.watchlist_db_path, str):
+            self.watchlist_db_path = Path(self.watchlist_db_path)
         if isinstance(self.log_file, str):
             self.log_file = Path(self.log_file)
         if isinstance(self.run_date, str):
@@ -186,6 +189,12 @@ class RunParams:
         path = self.output_base_dir / self.run_date.isoformat()
         utils.ensure_directory(path)
         return path
+
+    def resolved_watchlist_path(self) -> Path:
+        if self.watchlist_db_path is not None:
+            utils.ensure_directory(self.watchlist_db_path.parent)
+            return self.watchlist_db_path
+        return self.resolved_output_dir() / "watchlist.db"
 
     def resolved_log_file(self) -> Path:
         if self.log_file is not None:
@@ -217,12 +226,6 @@ def _build_ranker_config(cfg: PremarketModel) -> ranker.RankerConfig:
         caps=ranker.RankerCaps(**cfg.caps.model_dump()),
         earnings_window_days=cfg.earnings_exclude_window_days,
     )
-
-
-def _determine_output_dir(base_dir: Path, today: str) -> Path:
-    path = base_dir / today
-    utils.ensure_directory(path)
-    return path
 
 
 def _determine_log_path(log_file: Optional[Path], today: str) -> Path:
@@ -400,7 +403,7 @@ def _build_run_summary(
 
 
 def _emit_empty_outputs(
-    output_dir: Path,
+    db_path: Path,
     generated_at: str,
     requested_top_n: int,
     run_summary: Dict[str, object],
@@ -414,7 +417,7 @@ def _emit_empty_outputs(
         news_ai.summarize_scores({}),
     )
     persist.write_outputs(
-        output_dir / "watchlist.db",
+        db_path,
         watchlist=empty_table,
         top_rankings=empty_rankings,
         full_watchlist=empty_full_watchlist,
@@ -467,7 +470,8 @@ def run(params: RunParams) -> int:
     news_cfg.enabled = bool(news_enabled)
     weights_version = cfg.premarket.weights_version or "default"
 
-    output_dir = _determine_output_dir(params.output_base_dir, today)
+    watchlist_db_path = params.resolved_watchlist_path()
+    output_label = watchlist_db_path
     raw_csv_path = Path("data/raw") / today / "finviz_elite.csv"
 
     timings: Dict[str, float] = {}
@@ -497,12 +501,12 @@ def run(params: RunParams) -> int:
             False,
             0,
         )
-        _emit_empty_outputs(output_dir, generated_at, top_n_value, run_summary)
+        _emit_empty_outputs(watchlist_db_path, generated_at, top_n_value, run_summary)
         tier_display = _format_tier_counts({})
         summary_line = (
             f"Date={today} {_timezone_label(params.timezone, params.run_date)} | "
             f"TopN=0 | A/B/C={tier_display} | SectorCap=False | "
-            f"Cache=False | Out={output_dir}"
+            f"Cache=False | Out={output_label}"
         )
         logger.info(summary_line)
         return 2 if params.fail_on_empty else 0
@@ -566,13 +570,13 @@ def run(params: RunParams) -> int:
             week52_warnings,
             news_ai.summarize_scores({}),
         )
-        _emit_empty_outputs(output_dir, generated_at, top_n_value, run_summary)
+        _emit_empty_outputs(watchlist_db_path, generated_at, top_n_value, run_summary)
         empty_tiers: Dict[str, int] = {}
         tier_display = _format_tier_counts(empty_tiers)
         summary_line = (
             f"Date={today} {_timezone_label(params.timezone, params.run_date)} | "
             f"TopN=0 | A/B/C={tier_display} | SectorCap=False | "
-            f"Cache={used_cached_csv} | Out={output_dir}"
+            f"Cache={used_cached_csv} | Out={output_label}"
         )
         logger.info(summary_line)
         return 2 if params.fail_on_empty else 0
@@ -620,13 +624,13 @@ def run(params: RunParams) -> int:
             week52_warnings,
             news_signal_summary,
         )
-        _emit_empty_outputs(output_dir, generated_at, top_n_value, run_summary)
+        _emit_empty_outputs(watchlist_db_path, generated_at, top_n_value, run_summary)
         empty_tiers = {}
         tier_display = _format_tier_counts(empty_tiers)
         summary_line = (
             f"Date={today} {_timezone_label(params.timezone, params.run_date)} | "
             f"TopN=0 | A/B/C={tier_display} | SectorCap={sector_trimmed} | "
-            f"Cache={used_cached_csv} | Out={output_dir}"
+            f"Cache={used_cached_csv} | Out={output_label}"
         )
         logger.info(summary_line)
         return 2 if params.fail_on_empty else 0
@@ -734,7 +738,7 @@ def run(params: RunParams) -> int:
 
     persist_start = time.perf_counter()
     persist.write_outputs(
-        output_dir / "watchlist.db",
+        watchlist_db_path,
         watchlist=watchlist_table,
         top_rankings=top_rankings_df,
         full_watchlist=full_watchlist_df,
@@ -761,12 +765,12 @@ def run(params: RunParams) -> int:
         week52_warnings,
         news_signal_summary,
     )
-    persist.write_run_summary(output_dir / "watchlist.db", run_summary)
+    persist.write_run_summary(watchlist_db_path, run_summary)
 
     summary_line = (
         f"Date={today} {_timezone_label(params.timezone, params.run_date)} | "
         f"TopN={row_counts['topN']} | A/B/C={_format_tier_counts(tier_counts)} | "
-        f"SectorCap={sector_trimmed} | Cache={used_cached_csv} | Out={output_dir}"
+        f"SectorCap={sector_trimmed} | Cache={used_cached_csv} | Out={output_label}"
     )
     logger.info(summary_line)
 
