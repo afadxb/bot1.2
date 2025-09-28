@@ -1,0 +1,108 @@
+{
+  "generated_at": "2025-09-28T10:47:39.735879-04:00",
+  "top_n": 20,
+  "symbols": [
+    "ASM",
+    "FCX",
+    "LI",
+    "AXTA",
+    "PAA",
+    "PR",
+    "KVYO",
+    "ACN",
+    "WAY",
+    "BA",
+    "QUBT",
+    "HOUS",
+    "IREN",
+    "PCAR",
+    "KMX",
+    "KVUE",
+    "HUN",
+    "XEL",
+    "RIO",
+    "PHYS"
+  ],
+  "ranking": [
+    {
+      "symbol": "ASM",
+      "score": 0.12981076125598429
+    },
+    {
+      "symbol": "FCX",
+      "score": 0.16635210061505742
+    },
+    {
+      "symbol": "LI",
+      "score": 0.20693307108681205
+    },
+    {
+      "symbol": "AXTA",
+      "score": 0.06765504412115492
+    },
+    {
+      "symbol": "PAA",
+      "score": 0.1442125306309851
+    },
+    {
+      "symbol": "PR",
+      "score": 0.17744333063848938
+    },
+    {
+      "symbol": "KVYO",
+      "score": 0.08633491901871672
+    },
+    {
+      "symbol": "ACN",
+      "score": 0.09627824380385122
+    },
+    {
+      "symbol": "WAY",
+      "score": 0.1567182833525811
+    },
+    {
+      "symbol": "BA",
+      "score": 0.14994405362626873
+    },
+    {
+      "symbol": "QUBT",
+      "score": 0.14841209493410562
+    },
+    {
+      "symbol": "HOUS",
+      "score": 0.062251519811215544
+    },
+    {
+      "symbol": "IREN",
+      "score": 0.22739012965939348
+    },
+    {
+      "symbol": "PCAR",
+      "score": 0.14262946103443974
+    },
+    {
+      "symbol": "KMX",
+      "score": 0.21296972472911188
+    },
+    {
+      "symbol": "KVUE",
+      "score": 0.1591974295107493
+    },
+    {
+      "symbol": "HUN",
+      "score": 0.09301093515048685
+    },
+    {
+      "symbol": "XEL",
+      "score": 0.09945974846554874
+    },
+    {
+      "symbol": "RIO",
+      "score": 0.07210228527054535
+    },
+    {
+      "symbol": "PHYS",
+      "score": 0.17352956030269148
+    }
+  ]
+}

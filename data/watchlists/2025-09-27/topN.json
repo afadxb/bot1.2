@@ -1,0 +1,108 @@
+{
+  "generated_at": "2025-09-27T16:09:44.924213-04:00",
+  "top_n": 20,
+  "symbols": [
+    "ASM",
+    "KVUE",
+    "RGTI",
+    "AXTA",
+    "TRP",
+    "QUBT",
+    "KVYO",
+    "IREN",
+    "EMR",
+    "PR",
+    "LAC",
+    "FE",
+    "PHYS",
+    "CIFR",
+    "HUN",
+    "BA",
+    "IBM",
+    "PSLV",
+    "CIEN",
+    "CNM"
+  ],
+  "ranking": [
+    {
+      "symbol": "ASM",
+      "score": 0.12981076125598429
+    },
+    {
+      "symbol": "KVUE",
+      "score": 0.20852755961375857
+    },
+    {
+      "symbol": "RGTI",
+      "score": 0.16798249900947604
+    },
+    {
+      "symbol": "AXTA",
+      "score": 0.06765504412115492
+    },
+    {
+      "symbol": "TRP",
+      "score": 0.13553983832062746
+    },
+    {
+      "symbol": "QUBT",
+      "score": 0.14841209493410562
+    },
+    {
+      "symbol": "KVYO",
+      "score": 0.15547870652913337
+    },
+    {
+      "symbol": "IREN",
+      "score": 0.19550462553439352
+    },
+    {
+      "symbol": "EMR",
+      "score": 0.1861624473737899
+    },
+    {
+      "symbol": "PR",
+      "score": 0.10469991863270234
+    },
+    {
+      "symbol": "LAC",
+      "score": 0.338243512784564
+    },
+    {
+      "symbol": "FE",
+      "score": 0.13168465233673493
+    },
+    {
+      "symbol": "PHYS",
+      "score": 0.13521581543695074
+    },
+    {
+      "symbol": "CIFR",
+      "score": 0.1483034370814305
+    },
+    {
+      "symbol": "HUN",
+      "score": 0.09859106525349608
+    },
+    {
+      "symbol": "BA",
+      "score": 0.227180433729278
+    },
+    {
+      "symbol": "IBM",
+      "score": 0.15228646987873148
+    },
+    {
+      "symbol": "PSLV",
+      "score": 0.20763674649339836
+    },
+    {
+      "symbol": "CIEN",
+      "score": 0.07516841962556677
+    },
+    {
+      "symbol": "CNM",
+      "score": 0.07969717316320732
+    }
+  ]
+}

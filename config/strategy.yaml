@@ -1,0 +1,36 @@
+premarket:
+  price_min: 5
+  price_max: 500
+  avg_vol_min: 10
+  rel_vol_min: 0
+  float_min: 100
+  earnings_exclude_window_days: 1
+  max_per_sector: 0.4
+  top_n: 20
+  exclude_exchanges:
+    - OTC
+  exclude_countries: []
+
+  weights:
+    relvol: 0.30
+    gap: 0.15
+    avgvol: 0.10
+    float_band: 0.10
+    short_float: 0.07
+    after_hours: 0.05
+    change: 0.05
+    w52pos: 0.10
+    news_fresh: 0.10
+    analyst: 0.05
+    insider_inst: 0.03
+
+  penalties:
+    earnings_near: 0.10
+    pe_outlier: 0.05
+
+  caps:
+    max_single_negative: 0.10
+
+news:
+  enabled: true
+  freshness_hours: 24
