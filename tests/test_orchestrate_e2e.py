@@ -150,6 +150,10 @@ def test_orchestrate_end_to_end(tmp_path, monkeypatch):
     assert "news" in insights
     assert "ai_confidence" in insights
     assert "sector_focus" in insights
+    schemas = json.loads(metadata_rows[0]["table_schemas"])
+    assert "watchlist" in schemas
+    assert "AIConfidence" in schemas["watchlist"]
+    assert "ai_confidence" in schemas["top_rankings"]
 
     run_summary_rows = _fetch_rows(conn, "SELECT * FROM run_summary")
     run_summary = json.loads(run_summary_rows[0]["payload"])
@@ -214,6 +218,9 @@ def test_run_emits_empty_outputs_when_download_fails(tmp_path, monkeypatch):
     summary_rows = _fetch_rows(conn, "SELECT * FROM run_summary")
     assert len(summary_rows) == 1
     summary = json.loads(summary_rows[0]["payload"])
+    metadata_rows = _fetch_rows(conn, "SELECT * FROM metadata")
+    schemas = json.loads(metadata_rows[0]["table_schemas"])
+    assert schemas["watchlist"][-1] == "TopFeature5"
     conn.close()
 
     assert summary["row_counts"] == {"raw": 0, "qualified": 0, "rejected": 0, "topN": 0}

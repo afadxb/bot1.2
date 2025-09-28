@@ -52,6 +52,8 @@ WATCHLIST_COLUMNS = [
     "TopFeature5",
 ]
 
+TOP_RANKINGS_COLUMNS = ["rank", "symbol", "score", "ai_confidence"]
+
 FULL_WATCHLIST_COLUMNS = [
     "symbol",
     "company",
@@ -83,6 +85,15 @@ FULL_WATCHLIST_COLUMNS = [
     "rejection_reasons",
     "generated_at",
 ]
+
+def _table_schemas_metadata() -> dict[str, list[str]]:
+    """Return a mapping of table names to their column order for metadata."""
+
+    return {
+        "watchlist": WATCHLIST_COLUMNS,
+        "top_rankings": TOP_RANKINGS_COLUMNS,
+        "full_watchlist": FULL_WATCHLIST_COLUMNS,
+    }
 
 
 class WeightsModel(BaseModel):
@@ -396,7 +407,7 @@ def _emit_empty_outputs(
 ) -> None:
     empty_table = pd.DataFrame(columns=WATCHLIST_COLUMNS)
     empty_full_watchlist = pd.DataFrame(columns=FULL_WATCHLIST_COLUMNS)
-    empty_rankings = pd.DataFrame(columns=["rank", "symbol", "score", "ai_confidence"])
+    empty_rankings = pd.DataFrame(columns=TOP_RANKINGS_COLUMNS)
     empty_rejections = pd.DataFrame(columns=["ticker", "rejection_reasons"])
     empty_insights = _build_metadata_insights(
         pd.DataFrame(columns=["ai_confidence", "ticker", "sector"]),
@@ -408,7 +419,12 @@ def _emit_empty_outputs(
         top_rankings=empty_rankings,
         full_watchlist=empty_full_watchlist,
         run_summary=run_summary,
-        metadata={"generated_at": generated_at, "top_n": requested_top_n, "insights": empty_insights},
+        metadata={
+            "generated_at": generated_at,
+            "top_n": requested_top_n,
+            "insights": empty_insights,
+            "table_schemas": _table_schemas_metadata(),
+        },
         rejections=empty_rejections,
     )
 
@@ -689,10 +705,7 @@ def run(params: RunParams) -> int:
                 "ai_confidence": row.get("ai_confidence"),
             }
         )
-    top_rankings_df = pd.DataFrame(
-        top_rankings_records, columns=["rank", "symbol", "score", "ai_confidence"]
-    )
-
+    top_rankings_df = pd.DataFrame(top_rankings_records, columns=TOP_RANKINGS_COLUMNS)
     watchlist_records: list[dict[str, object]] = []
     for idx, (_, row) in enumerate(diversified_df.iterrows()):
         record: dict[str, object] = {
@@ -716,6 +729,7 @@ def run(params: RunParams) -> int:
         "generated_at": generated_at,
         "top_n": top_n_value,
         "insights": _build_metadata_insights(diversified_df, news_signal_summary),
+        "table_schemas": _table_schemas_metadata(),
     }
 
     persist_start = time.perf_counter()
