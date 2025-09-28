@@ -706,7 +706,6 @@ def run(params: RunParams) -> int:
             }
         )
     top_rankings_df = pd.DataFrame(top_rankings_records, columns=TOP_RANKINGS_COLUMNS)
-
     watchlist_records: list[dict[str, object]] = []
     for idx, (_, row) in enumerate(diversified_df.iterrows()):
         record: dict[str, object] = {
