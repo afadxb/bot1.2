@@ -111,9 +111,11 @@ def test_orchestrate_end_to_end(tmp_path, monkeypatch):
 
     run_date = date(2024, 1, 2)
     out_base = tmp_path / "out"
+    watchlist_path = tmp_path / "watchlist.db"
     params = orchestrate.RunParams(
         config_path=Path("config/strategy.yaml"),
         output_base_dir=out_base,
+        watchlist_db_path=watchlist_path,
         top_n=2,
         use_cache=True,
         news_override=False,
@@ -126,13 +128,11 @@ def test_orchestrate_end_to_end(tmp_path, monkeypatch):
     code = orchestrate.run(params)
 
     assert code == 0
-    out_dir = out_base / run_date.isoformat()
     rejection_path = csv_path.with_name("finviz_reject.csv")
-    db_path = out_dir / "watchlist.db"
-    assert db_path.exists()
+    assert watchlist_path.exists()
     assert rejection_path.exists()
 
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(watchlist_path)
     watchlist_rows = _fetch_rows(conn, "SELECT * FROM watchlist")
     assert watchlist_rows
     assert "Why" in watchlist_rows[0]
@@ -183,6 +183,7 @@ def test_orchestrate_end_to_end(tmp_path, monkeypatch):
 def test_run_emits_empty_outputs_when_download_fails(tmp_path, monkeypatch):
     monkeypatch.setenv("FINVIZ_EXPORT_URL", "https://example.com/export")
     out_base = tmp_path / "out"
+    watchlist_path = tmp_path / "watchlist.db"
     run_date = date(2024, 1, 2)
 
     def boom(*_, **__):
@@ -193,6 +194,7 @@ def test_run_emits_empty_outputs_when_download_fails(tmp_path, monkeypatch):
     params = orchestrate.RunParams(
         config_path=Path("config/strategy.yaml"),
         output_base_dir=out_base,
+        watchlist_db_path=watchlist_path,
         use_cache=True,
         news_override=False,
         run_date=run_date,
@@ -203,11 +205,9 @@ def test_run_emits_empty_outputs_when_download_fails(tmp_path, monkeypatch):
 
     assert exit_code == 0
 
-    out_dir = out_base / run_date.isoformat()
-    db_path = out_dir / "watchlist.db"
-    assert db_path.exists()
+    assert watchlist_path.exists()
 
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(watchlist_path)
 
     watchlist_rows = _fetch_rows(conn, "SELECT * FROM watchlist")
     assert watchlist_rows == []

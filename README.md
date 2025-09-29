@@ -74,6 +74,7 @@ FINNHUB_API_KEY="your-finnhub-token"
 # Runtime overrides (all optional)
 PREMARKET_CONFIG_PATH="config/strategy.yaml"
 PREMARKET_OUT_DIR="data/watchlists"      # YYYY-MM-DD is auto-appended
+PREMARKET_SHARED_DB="data/watchlists/watchlist.db"  # static SQLite output location
 PREMARKET_TOP_N=20                        # override YAML top_n
 PREMARKET_USE_CACHE=true                  # allow fallback to cached CSV if download fails
 PREMARKET_NEWS_ENABLED=false              # force news probe on/off

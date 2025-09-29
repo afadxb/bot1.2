@@ -199,9 +199,16 @@ def main(argv: Optional[list[str]] = None) -> int:
         fail_on_empty = cli_fail
         overrides.add("PREMARKET_FAIL_ON_EMPTY")
 
+    watchlist_db_path: Optional[Path] = None
+    watchlist_db_env = utils.env_str("PREMARKET_SHARED_DB")
+    if watchlist_db_env is not None:
+        watchlist_db_path = Path(watchlist_db_env)
+        overrides.add("PREMARKET_SHARED_DB")
+
     params = orchestrate.RunParams(
         config_path=Path(config_value),
         output_base_dir=output_base,
+        watchlist_db_path=watchlist_db_path,
         top_n=top_n,
         use_cache=use_cache,
         news_override=news_override,
