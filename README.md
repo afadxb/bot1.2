@@ -74,7 +74,6 @@ FINNHUB_API_KEY="your-finnhub-token"
 # Runtime overrides (all optional)
 PREMARKET_CONFIG_PATH="config/strategy.yaml"
 PREMARKET_OUT_DIR="data/watchlists"      # YYYY-MM-DD is auto-appended
-PREMARKET_SHARED_DB="data/watchlists/watchlist.db"  # static SQLite output location
 PREMARKET_TOP_N=20                        # override YAML top_n
 PREMARKET_USE_CACHE=true                  # allow fallback to cached CSV if download fails
 PREMARKET_NEWS_ENABLED=false              # force news probe on/off
@@ -83,6 +82,8 @@ PREMARKET_LOG_FILE="logs/premarket.log"  # defaults to logs/premarket_<date>.log
 PREMARKET_DATE=2025-10-01                 # backfill run date (timezone aware)
 PREMARKET_FAIL_ON_EMPTY=false             # return success even if no rows qualify
 PREMARKET_TZ="America/New_York"          # timezone for scheduling & logging
+PREMARKET_SCHEDULE="07:30,08:45"         # optional daily run times (HH:MM[,HH:MM...])
+PREMARKET_SCHEDULE_RUNS=1                # limit scheduled executions (optional)
 ```
 
 ## Testing

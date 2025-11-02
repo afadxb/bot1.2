@@ -94,13 +94,11 @@ def _sample_csv(path: Path) -> None:
     df.to_csv(path, index=False)
 
 
-def _fetch_rows(conn: sqlite3.Connection, query: str) -> list[dict[str, object]]:
-    cursor = conn.execute(query)
-    columns = [desc[0] for desc in cursor.description]
-    return [dict(zip(columns, row)) for row in cursor.fetchall()]
-
-
 def test_orchestrate_end_to_end(tmp_path, monkeypatch):
+    db_path = Path("premarket.db")
+    if db_path.exists():
+        db_path.unlink()
+
     csv_path = tmp_path / "finviz.csv"
     _sample_csv(csv_path)
 
@@ -111,11 +109,9 @@ def test_orchestrate_end_to_end(tmp_path, monkeypatch):
 
     run_date = date(2024, 1, 2)
     out_base = tmp_path / "out"
-    watchlist_path = tmp_path / "watchlist.db"
     params = orchestrate.RunParams(
         config_path=Path("config/strategy.yaml"),
         output_base_dir=out_base,
-        watchlist_db_path=watchlist_path,
         top_n=2,
         use_cache=True,
         news_override=False,
@@ -128,48 +124,27 @@ def test_orchestrate_end_to_end(tmp_path, monkeypatch):
     code = orchestrate.run(params)
 
     assert code == 0
+    out_dir = out_base / run_date.isoformat()
     rejection_path = csv_path.with_name("finviz_reject.csv")
-    assert watchlist_path.exists()
+    assert (out_dir / "full_watchlist.json").exists()
+    assert (out_dir / "topN.json").exists()
+    assert (out_dir / "watchlist.csv").exists()
+    assert (out_dir / "run_summary.json").exists()
     assert rejection_path.exists()
 
-    conn = sqlite3.connect(watchlist_path)
-    watchlist_rows = _fetch_rows(conn, "SELECT * FROM watchlist")
-    assert watchlist_rows
-    assert "Why" in watchlist_rows[0]
-    assert "TopFeature5" in watchlist_rows[0]
-    assert "AIConfidence" in watchlist_rows[0]
-    assert float(watchlist_rows[0]["AIConfidence"]) >= 0.0
+    topn = json.loads((out_dir / "topN.json").read_text())
+    assert topn["top_n"] == 2
+    assert len(topn["symbols"]) == 2
+    top_symbols_list = topn["symbols"]
 
-    topn_rows = _fetch_rows(conn, "SELECT * FROM top_rankings")
-    assert len(topn_rows) == 2
-    assert "ai_confidence" in topn_rows[0]
+    watchlist_df = pd.read_csv(out_dir / "watchlist.csv")
+    assert "Why" in watchlist_df.columns
+    assert "TopFeature5" in watchlist_df.columns
 
-    metadata_rows = _fetch_rows(conn, "SELECT * FROM metadata")
-    assert int(metadata_rows[0]["top_n"]) == 2
-    insights = json.loads(metadata_rows[0]["insights"])
-    assert "news" in insights
-    assert "ai_confidence" in insights
-    assert "sector_focus" in insights
-    schemas = json.loads(metadata_rows[0]["table_schemas"])
-    assert "watchlist" in schemas
-    assert "AIConfidence" in schemas["watchlist"]
-    assert "ai_confidence" in schemas["top_rankings"]
-
-    run_summary_rows = _fetch_rows(conn, "SELECT * FROM run_summary")
-    run_summary = json.loads(run_summary_rows[0]["payload"])
+    run_summary = json.loads((out_dir / "run_summary.json").read_text())
     assert run_summary["row_counts"]["topN"] == 2
     assert "csv_hash" in run_summary
     assert run_summary["env_overrides_used"] == sorted(params.env_overrides)
-    assert "news_signal" in run_summary
-
-    full_watchlist_rows = _fetch_rows(conn, "SELECT * FROM full_watchlist")
-    assert full_watchlist_rows
-    assert "ai_confidence" in full_watchlist_rows[0]
-
-    rejections_rows = _fetch_rows(conn, "SELECT * FROM rejections")
-    if rejections_rows:
-        assert "rejection_reasons" in rejections_rows[0]
-    conn.close()
 
     rejected_df = pd.read_csv(rejection_path)
     assert "ticker" in rejected_df.columns
@@ -179,11 +154,61 @@ def test_orchestrate_end_to_end(tmp_path, monkeypatch):
     parsed_reasons = [part.strip() for part in reason.split("|") if part.strip()]
     assert "exchange_excluded" in parsed_reasons
 
+    assert db_path.exists()
+    with sqlite3.connect(db_path) as conn:
+        full_rows = conn.execute(
+            "SELECT symbol, score FROM full_watchlist WHERE run_date = ?",
+            (run_date.isoformat(),),
+        ).fetchall()
+        assert full_rows
+        first_symbol, first_score = full_rows[0]
+        assert first_symbol in {"AAA", "BBB"}
+        assert first_score is not None
+
+        top_rows = conn.execute(
+            "SELECT rank, symbol, score FROM top_n WHERE run_date = ? ORDER BY rank",
+            (run_date.isoformat(),),
+        ).fetchall()
+        assert len(top_rows) == 2
+        assert [row[0] for row in top_rows] == [1, 2]
+        assert {row[1] for row in top_rows} == set(top_symbols_list)
+
+        watch_rows = conn.execute(
+            """
+            SELECT rank, symbol, why, tags_json
+            FROM watchlist
+            WHERE run_date = ?
+            ORDER BY rank
+            """,
+            (run_date.isoformat(),),
+        ).fetchall()
+        assert len(watch_rows) == 2
+        assert watch_rows[0][0] == 1
+        assert isinstance(watch_rows[0][2], str)
+        tags = json.loads(watch_rows[0][3]) if watch_rows[0][3] else []
+        assert isinstance(tags, list)
+
+        summary_row = conn.execute(
+            """
+            SELECT row_counts_json, used_cached_csv
+            FROM run_summary
+            WHERE run_date = ?
+            """,
+            (run_date.isoformat(),),
+        ).fetchone()
+        assert summary_row is not None
+        summary_payload = json.loads(summary_row[0])
+        assert summary_payload["topN"] == 2
+        assert summary_row[1] in (0, 1)
+
 
 def test_run_emits_empty_outputs_when_download_fails(tmp_path, monkeypatch):
+    db_path = Path("premarket.db")
+    if db_path.exists():
+        db_path.unlink()
+
     monkeypatch.setenv("FINVIZ_EXPORT_URL", "https://example.com/export")
     out_base = tmp_path / "out"
-    watchlist_path = tmp_path / "watchlist.db"
     run_date = date(2024, 1, 2)
 
     def boom(*_, **__):
@@ -194,7 +219,6 @@ def test_run_emits_empty_outputs_when_download_fails(tmp_path, monkeypatch):
     params = orchestrate.RunParams(
         config_path=Path("config/strategy.yaml"),
         output_base_dir=out_base,
-        watchlist_db_path=watchlist_path,
         use_cache=True,
         news_override=False,
         run_date=run_date,
@@ -205,24 +229,32 @@ def test_run_emits_empty_outputs_when_download_fails(tmp_path, monkeypatch):
 
     assert exit_code == 0
 
-    assert watchlist_path.exists()
+    out_dir = out_base / run_date.isoformat()
+    assert (out_dir / "full_watchlist.json").exists()
+    assert (out_dir / "topN.json").exists()
+    assert (out_dir / "watchlist.csv").exists()
+    assert (out_dir / "run_summary.json").exists()
 
-    conn = sqlite3.connect(watchlist_path)
+    topn = json.loads((out_dir / "topN.json").read_text())
+    assert topn["symbols"] == []
 
-    watchlist_rows = _fetch_rows(conn, "SELECT * FROM watchlist")
-    assert watchlist_rows == []
-
-    topn_rows = _fetch_rows(conn, "SELECT * FROM top_rankings")
-    assert topn_rows == []
-
-    summary_rows = _fetch_rows(conn, "SELECT * FROM run_summary")
-    assert len(summary_rows) == 1
-    summary = json.loads(summary_rows[0]["payload"])
-    metadata_rows = _fetch_rows(conn, "SELECT * FROM metadata")
-    schemas = json.loads(metadata_rows[0]["table_schemas"])
-    assert schemas["watchlist"][-1] == "TopFeature5"
-    conn.close()
-
+    summary = json.loads((out_dir / "run_summary.json").read_text())
     assert summary["row_counts"] == {"raw": 0, "qualified": 0, "rejected": 0, "topN": 0}
     assert "download_failed_no_cache" in summary["notes"]
     assert summary["used_cached_csv"] is False
+
+    assert db_path.exists()
+    with sqlite3.connect(db_path) as conn:
+        top_rows = conn.execute(
+            "SELECT rank FROM top_n WHERE run_date = ?",
+            (run_date.isoformat(),),
+        ).fetchall()
+        assert top_rows == []
+
+        summary_row = conn.execute(
+            "SELECT row_counts_json FROM run_summary WHERE run_date = ?",
+            (run_date.isoformat(),),
+        ).fetchone()
+        assert summary_row is not None
+        payload = json.loads(summary_row[0])
+        assert payload["topN"] == 0

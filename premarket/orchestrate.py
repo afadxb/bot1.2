@@ -16,7 +16,7 @@ import yaml
 from dateutil import tz
 from pydantic import BaseModel, Field
 
-from . import features, filters, loader_finviz, news_ai, normalize, persist, ranker, utils
+from . import features, filters, loader_finviz, normalize, persist, ranker, utils
 from .news_probe import probe as news_probe
 
 LOGGER = logging.getLogger(__name__)
@@ -39,7 +39,6 @@ WATCHLIST_COLUMNS = [
     "rank",
     "symbol",
     "score",
-    "AIConfidence",
     "tier",
     "gap_pct",
     "rel_volume",
@@ -51,49 +50,6 @@ WATCHLIST_COLUMNS = [
     "TopFeature4",
     "TopFeature5",
 ]
-
-TOP_RANKINGS_COLUMNS = ["rank", "symbol", "score", "ai_confidence"]
-
-FULL_WATCHLIST_COLUMNS = [
-    "symbol",
-    "company",
-    "sector",
-    "industry",
-    "exchange",
-    "market_cap",
-    "pe",
-    "price",
-    "change_pct",
-    "gap_pct",
-    "volume",
-    "avg_volume_3m",
-    "rel_volume",
-    "float_shares",
-    "short_float_pct",
-    "after_hours_change_pct",
-    "week52_range",
-    "week52_pos",
-    "earnings_date",
-    "analyst_recom",
-    "insider_transactions",
-    "institutional_transactions",
-    "features",
-    "score",
-    "ai_confidence",
-    "tier",
-    "tags",
-    "rejection_reasons",
-    "generated_at",
-]
-
-def _table_schemas_metadata() -> dict[str, list[str]]:
-    """Return a mapping of table names to their column order for metadata."""
-
-    return {
-        "watchlist": WATCHLIST_COLUMNS,
-        "top_rankings": TOP_RANKINGS_COLUMNS,
-        "full_watchlist": FULL_WATCHLIST_COLUMNS,
-    }
 
 
 class WeightsModel(BaseModel):
@@ -156,7 +112,6 @@ class RunParams:
     config_path: Path
     run_date: date
     output_base_dir: Path = field(default_factory=lambda: Path("data/watchlists"))
-    watchlist_db_path: Optional[Path] = None
     top_n: Optional[int] = None
     use_cache: bool = True
     news_override: Optional[bool] = None
@@ -171,8 +126,6 @@ class RunParams:
             self.config_path = Path(self.config_path)
         if isinstance(self.output_base_dir, str):
             self.output_base_dir = Path(self.output_base_dir)
-        if isinstance(self.watchlist_db_path, str):
-            self.watchlist_db_path = Path(self.watchlist_db_path)
         if isinstance(self.log_file, str):
             self.log_file = Path(self.log_file)
         if isinstance(self.run_date, str):
@@ -189,12 +142,6 @@ class RunParams:
         path = self.output_base_dir / self.run_date.isoformat()
         utils.ensure_directory(path)
         return path
-
-    def resolved_watchlist_path(self) -> Path:
-        if self.watchlist_db_path is not None:
-            utils.ensure_directory(self.watchlist_db_path.parent)
-            return self.watchlist_db_path
-        return self.resolved_output_dir() / "watchlist.db"
 
     def resolved_log_file(self) -> Path:
         if self.log_file is not None:
@@ -228,6 +175,12 @@ def _build_ranker_config(cfg: PremarketModel) -> ranker.RankerConfig:
     )
 
 
+def _determine_output_dir(base_dir: Path, today: str) -> Path:
+    path = base_dir / today
+    utils.ensure_directory(path)
+    return path
+
+
 def _determine_log_path(log_file: Optional[Path], today: str) -> Path:
     if log_file is not None:
         return log_file
@@ -238,8 +191,16 @@ def _news_scores(symbols: list[str], news_cfg: NewsModel) -> Dict[str, float]:
     if not news_cfg.enabled or not symbols:
         return {symbol: 0.0 for symbol in symbols}
     raw = news_probe(symbols, news_cfg)
-    horizon = news_cfg.freshness_hours or 24
-    return news_ai.score_batch(raw, horizon_hours=horizon)
+    scores: Dict[str, float] = {}
+    for symbol, payload in raw.items():
+        freshness = payload.get("freshness_hours") if isinstance(payload, dict) else None
+        if freshness is None:
+            scores[symbol] = 0.0
+        else:
+            freshness = max(0.0, float(freshness))
+            normalized = max(0.0, 1 - min(freshness, news_cfg.freshness_hours) / news_cfg.freshness_hours)
+            scores[symbol] = float(np.clip(normalized, 0.0, 1.0))
+    return scores
 
 
 def _tags_for_row(row: pd.Series) -> list[str]:
@@ -289,74 +250,6 @@ def _feature_contributions(row: pd.Series, weights: ranker.RankerWeights) -> lis
     return contributions
 
 
-def _summarize_ai_confidence(df: pd.DataFrame) -> dict[str, object]:
-    if df.empty or "ai_confidence" not in df.columns:
-        return {"average": 0.0, "leaders": [], "count": 0}
-
-    confidence_series = pd.to_numeric(df["ai_confidence"], errors="coerce")
-    confidence_series = confidence_series.dropna()
-    values = list(zip(confidence_series.index, confidence_series.to_list()))
-    filtered = [(idx, float(val)) for idx, val in values if not pd.isna(val)]
-    if not filtered:
-        return {"average": 0.0, "leaders": [], "count": 0}
-
-    total = sum(val for _, val in filtered)
-    count = len(filtered)
-    average = total / count if count else 0.0
-    filtered.sort(key=lambda item: item[1], reverse=True)
-
-    ticker_series = df.get("ticker") if "ticker" in df.columns else None
-    ticker_lookup = {}
-    if ticker_series is not None:
-        ticker_lookup = dict(zip(ticker_series.index, ticker_series.to_list()))
-
-    leaders: list[dict[str, object]] = []
-    for idx, score in filtered[:3]:
-        symbol = ticker_lookup.get(idx)
-        if not symbol:
-            continue
-        leaders.append({"symbol": str(symbol), "confidence": round(float(score), 2)})
-
-    return {
-        "average": round(float(average), 2),
-        "leaders": leaders,
-        "count": int(count),
-    }
-
-
-def _sector_distribution(df: pd.DataFrame) -> dict[str, int]:
-    if df.empty or "sector" not in df.columns:
-        return {}
-    sector_series = df.get("sector")
-    if sector_series is None:
-        return {}
-    cleaned: list[str] = []
-    for value in sector_series.to_list():
-        if value is None:
-            continue
-        text = str(value).strip()
-        if text:
-            cleaned.append(text)
-    if not cleaned:
-        return {}
-    counts: dict[str, int] = {}
-    for item in cleaned:
-        counts[item] = counts.get(item, 0) + 1
-    sorted_counts = sorted(counts.items(), key=lambda entry: (-entry[1], entry[0]))
-    top_five = sorted_counts[:5]
-    return {sector: int(count) for sector, count in top_five}
-
-
-def _build_metadata_insights(
-    df: pd.DataFrame, news_summary: dict[str, object]
-) -> dict[str, object]:
-    return {
-        "news": news_summary,
-        "ai_confidence": _summarize_ai_confidence(df),
-        "sector_focus": _sector_distribution(df),
-    }
-
-
 def _timezone_label(tz_name: str, run_day: date) -> str:
     tzinfo = tz.gettz(tz_name)
     if tzinfo is None:
@@ -381,7 +274,6 @@ def _build_run_summary(
     used_cached_csv: bool,
     sector_cap_applied: bool,
     week52_warnings: int,
-    news_signal: Optional[dict[str, object]] = None,
 ) -> Dict[str, object]:
     summary = {
         "date": date_str,
@@ -397,38 +289,36 @@ def _build_run_summary(
         "used_cached_csv": bool(used_cached_csv),
         "week52_warning_count": int(week52_warnings),
     }
-    if news_signal is not None:
-        summary["news_signal"] = news_signal
     return summary
 
 
 def _emit_empty_outputs(
-    db_path: Path,
+    output_dir: Path,
     generated_at: str,
     requested_top_n: int,
     run_summary: Dict[str, object],
+    run_date: str,
 ) -> None:
-    empty_table = pd.DataFrame(columns=WATCHLIST_COLUMNS)
-    empty_full_watchlist = pd.DataFrame(columns=FULL_WATCHLIST_COLUMNS)
-    empty_rankings = pd.DataFrame(columns=TOP_RANKINGS_COLUMNS)
-    empty_rejections = pd.DataFrame(columns=["ticker", "rejection_reasons"])
-    empty_insights = _build_metadata_insights(
-        pd.DataFrame(columns=["ai_confidence", "ticker", "sector"]),
-        news_ai.summarize_scores({}),
-    )
-    persist.write_outputs(
-        db_path,
-        watchlist=empty_table,
-        top_rankings=empty_rankings,
-        full_watchlist=empty_full_watchlist,
-        run_summary=run_summary,
-        metadata={
+    persist.write_json([], output_dir / "full_watchlist.json")
+    persist.write_json(
+        {
             "generated_at": generated_at,
             "top_n": requested_top_n,
-            "insights": empty_insights,
-            "table_schemas": _table_schemas_metadata(),
+            "symbols": [],
+            "ranking": [],
         },
-        rejections=empty_rejections,
+        output_dir / "topN.json",
+    )
+    empty_table = pd.DataFrame(columns=WATCHLIST_COLUMNS)
+    persist.write_csv(empty_table, output_dir / "watchlist.csv")
+    persist.write_json(run_summary, output_dir / "run_summary.json")
+    persist.write_sqlite_outputs(
+        run_date=run_date,
+        generated_at=generated_at,
+        full_watchlist=[],
+        top_n_records=[],
+        watchlist_records=[],
+        run_summary=run_summary,
     )
 
 
@@ -470,8 +360,7 @@ def run(params: RunParams) -> int:
     news_cfg.enabled = bool(news_enabled)
     weights_version = cfg.premarket.weights_version or "default"
 
-    watchlist_db_path = params.resolved_watchlist_path()
-    output_label = watchlist_db_path
+    output_dir = _determine_output_dir(params.output_base_dir, today)
     raw_csv_path = Path("data/raw") / today / "finviz_elite.csv"
 
     timings: Dict[str, float] = {}
@@ -501,12 +390,12 @@ def run(params: RunParams) -> int:
             False,
             0,
         )
-        _emit_empty_outputs(watchlist_db_path, generated_at, top_n_value, run_summary)
+        _emit_empty_outputs(output_dir, generated_at, top_n_value, run_summary, today)
         tier_display = _format_tier_counts({})
         summary_line = (
             f"Date={today} {_timezone_label(params.timezone, params.run_date)} | "
             f"TopN=0 | A/B/C={tier_display} | SectorCap=False | "
-            f"Cache=False | Out={output_label}"
+            f"Cache=False | Out={output_dir}"
         )
         logger.info(summary_line)
         return 2 if params.fail_on_empty else 0
@@ -541,7 +430,7 @@ def run(params: RunParams) -> int:
             if isinstance(reasons, (list, tuple))
             else ("" if pd.isna(reasons) else str(reasons))
         )
-    rejected_for_csv.to_csv(rejection_report_path, index=False)
+    persist.write_csv(rejected_for_csv, rejection_report_path)
 
     row_counts = {
         "raw": int(raw_rows) if "raw_rows" in locals() else 0,
@@ -568,15 +457,14 @@ def run(params: RunParams) -> int:
             used_cached_csv,
             False,
             week52_warnings,
-            news_ai.summarize_scores({}),
         )
-        _emit_empty_outputs(watchlist_db_path, generated_at, top_n_value, run_summary)
+        _emit_empty_outputs(output_dir, generated_at, top_n_value, run_summary, today)
         empty_tiers: Dict[str, int] = {}
         tier_display = _format_tier_counts(empty_tiers)
         summary_line = (
             f"Date={today} {_timezone_label(params.timezone, params.run_date)} | "
             f"TopN=0 | A/B/C={tier_display} | SectorCap=False | "
-            f"Cache={used_cached_csv} | Out={output_label}"
+            f"Cache={used_cached_csv} | Out={output_dir}"
         )
         logger.info(summary_line)
         return 2 if params.fail_on_empty else 0
@@ -584,9 +472,6 @@ def run(params: RunParams) -> int:
     start = time.perf_counter()
     symbols = qualified_df.get("ticker", pd.Series(dtype=str)).fillna("").astype(str).tolist()
     news_scores = _news_scores(symbols, news_cfg)
-    news_signal_summary = news_ai.summarize_scores(news_scores)
-    if news_signal_summary["average"]:
-        notes.append(f"news_signal_avg: {news_signal_summary['average']}")
     qualified_df["news_fresh_score"] = [news_scores.get(sym, 0.0) for sym in symbols]
 
     featured_df = features.build_features(qualified_df, cfg)
@@ -594,8 +479,6 @@ def run(params: RunParams) -> int:
     rank_cfg = _build_ranker_config(cfg.premarket)
     scores = ranker.compute_score(featured_df, rank_cfg)
     featured_df["score"] = scores
-    ai_confidence = scores.clip(lower=0.0, upper=1.0) * 100
-    featured_df["ai_confidence"] = ai_confidence
     featured_df["tier"] = ranker.assign_tiers(scores)
     timings["score"] = time.perf_counter() - start
 
@@ -622,21 +505,20 @@ def run(params: RunParams) -> int:
             used_cached_csv,
             sector_trimmed,
             week52_warnings,
-            news_signal_summary,
         )
-        _emit_empty_outputs(watchlist_db_path, generated_at, top_n_value, run_summary)
+        _emit_empty_outputs(output_dir, generated_at, top_n_value, run_summary, today)
         empty_tiers = {}
         tier_display = _format_tier_counts(empty_tiers)
         summary_line = (
             f"Date={today} {_timezone_label(params.timezone, params.run_date)} | "
             f"TopN=0 | A/B/C={tier_display} | SectorCap={sector_trimmed} | "
-            f"Cache={used_cached_csv} | Out={output_label}"
+            f"Cache={used_cached_csv} | Out={output_dir}"
         )
         logger.info(summary_line)
         return 2 if params.fail_on_empty else 0
 
     diversified_df = diversified_df.head(top_n_value).copy()
-    diversified_df["rank"] = list(range(1, len(diversified_df) + 1))
+    diversified_df["rank"] = range(1, len(diversified_df) + 1)
     diversified_df["tags"] = diversified_df.apply(_tags_for_row, axis=1)
 
     rank_weights = rank_cfg.weights
@@ -683,7 +565,6 @@ def run(params: RunParams) -> int:
             "analyst_recom": row.get("analyst_recom"),
             "features": features_dict,
             "score": row.get("score"),
-            "ai_confidence": row.get("ai_confidence"),
             "tier": row.get("tier"),
             "tags": _tags_for_row(row),
             "rejection_reasons": row.get("rejection_reasons", []),
@@ -697,55 +578,30 @@ def run(params: RunParams) -> int:
             item["week52_pos"] = row.get("week52_pos")
         full_watchlist.append(item)
 
-    full_watchlist_df = pd.DataFrame(full_watchlist, columns=FULL_WATCHLIST_COLUMNS)
+    start = time.perf_counter()
+    persist.write_json(full_watchlist, output_dir / "full_watchlist.json")
 
-    top_rankings_records: list[dict[str, object]] = []
-    for _, row in diversified_df.iterrows():
-        top_rankings_records.append(
-            {
-                "rank": row.get("rank"),
-                "symbol": row.get("ticker"),
-                "score": row.get("score"),
-                "ai_confidence": row.get("ai_confidence"),
-            }
-        )
-    top_rankings_df = pd.DataFrame(top_rankings_records, columns=TOP_RANKINGS_COLUMNS)
-    watchlist_records: list[dict[str, object]] = []
-    for idx, (_, row) in enumerate(diversified_df.iterrows()):
-        record: dict[str, object] = {
-            "rank": row.get("rank"),
-            "symbol": row.get("ticker"),
-            "score": row.get("score"),
-            "AIConfidence": row.get("ai_confidence"),
-            "tier": row.get("tier"),
-            "gap_pct": row.get("gap_pct"),
-            "rel_volume": row.get("rel_volume"),
-            "tags": row.get("tags"),
-            "Why": why_values[idx] if idx < len(why_values) else "",
-        }
-        for feature_idx in range(1, 6):
-            values = feature_columns.get(feature_idx, [])
-            record[f"TopFeature{feature_idx}"] = values[idx] if idx < len(values) else ""
-        watchlist_records.append(record)
-    watchlist_table = pd.DataFrame(watchlist_records, columns=WATCHLIST_COLUMNS)
-
-    metadata = {
-        "generated_at": generated_at,
-        "top_n": top_n_value,
-        "insights": _build_metadata_insights(diversified_df, news_signal_summary),
-        "table_schemas": _table_schemas_metadata(),
-    }
-
-    persist_start = time.perf_counter()
-    persist.write_outputs(
-        watchlist_db_path,
-        watchlist=watchlist_table,
-        top_rankings=top_rankings_df,
-        full_watchlist=full_watchlist_df,
-        metadata=metadata,
-        rejections=rejected_for_csv,
+    top_symbols = diversified_df[["ticker", "score"]].rename(columns={"ticker": "symbol"})
+    top_symbols_list = top_symbols["symbol"].tolist()
+    persist.write_json(
+        {
+            "generated_at": generated_at,
+            "top_n": top_n_value,
+            "symbols": top_symbols_list,
+            "ranking": top_symbols.to_dict(orient="records"),
+        },
+        output_dir / "topN.json",
     )
-    timings["persist"] = time.perf_counter() - persist_start
+
+    watchlist_table = diversified_df[
+        ["rank", "ticker", "score", "tier", "gap_pct", "rel_volume", "tags"]
+    ].rename(columns={"ticker": "symbol"})
+    watchlist_table = watchlist_table.copy()
+    watchlist_table["Why"] = why_values
+    for idx, values in feature_columns.items():
+        watchlist_table[f"TopFeature{idx}"] = values
+    persist.write_csv(watchlist_table, output_dir / "watchlist.csv")
+    timings["persist"] = time.perf_counter() - start
 
     tier_counts = diversified_df["tier"].value_counts().to_dict()
     row_counts["topN"] = int(len(diversified_df))
@@ -763,14 +619,34 @@ def run(params: RunParams) -> int:
         used_cached_csv,
         sector_trimmed,
         week52_warnings,
-        news_signal_summary,
     )
-    persist.write_run_summary(watchlist_db_path, run_summary)
-
+    persist.write_json(run_summary, output_dir / "run_summary.json")
+    raw_watchlist_records = watchlist_table.to_dict(orient="records")
+    watchlist_records: list[Dict[str, object]] = []
+    for idx, record in enumerate(raw_watchlist_records, start=1):
+        cleaned = dict(record)
+        cleaned["rank"] = idx
+        watchlist_records.append(cleaned)
+    top_symbols_records = [
+        {
+            "rank": record.get("rank"),
+            "symbol": record.get("symbol"),
+            "score": record.get("score"),
+        }
+        for record in watchlist_records
+    ]
+    persist.write_sqlite_outputs(
+        run_date=today,
+        generated_at=generated_at,
+        full_watchlist=full_watchlist,
+        top_n_records=top_symbols_records,
+        watchlist_records=watchlist_records,
+        run_summary=run_summary,
+    )
     summary_line = (
         f"Date={today} {_timezone_label(params.timezone, params.run_date)} | "
         f"TopN={row_counts['topN']} | A/B/C={_format_tier_counts(tier_counts)} | "
-        f"SectorCap={sector_trimmed} | Cache={used_cached_csv} | Out={output_label}"
+        f"SectorCap={sector_trimmed} | Cache={used_cached_csv} | Out={output_dir}"
     )
     logger.info(summary_line)
 

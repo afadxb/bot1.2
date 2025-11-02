@@ -9,6 +9,12 @@ from pathlib import Path
 from premarket import __main__ as cli
 
 
+def _write_dummy_config(tmp_path):
+    config_path = tmp_path / "strategy.yaml"
+    config_path.write_text("{}", encoding="utf-8")
+    return config_path
+
+
 def test_main_trims_commented_output_dir_env(monkeypatch, tmp_path):
     captured: dict[str, Path] = {}
 
@@ -23,8 +29,7 @@ def test_main_trims_commented_output_dir_env(monkeypatch, tmp_path):
     monkeypatch.setattr(cli.orchestrate, "run", fake_run)
 
     # ensure the config path resolves without touching the real filesystem
-    config_path = tmp_path / "strategy.yaml"
-    config_path.write_text("{}", encoding="utf-8")
+    config_path = _write_dummy_config(tmp_path)
     monkeypatch.setenv("PREMARKET_CONFIG_PATH", str(config_path))
 
     exit_code = cli.main([])
@@ -53,4 +58,35 @@ def test_root_main_run_delegates_to_cli(monkeypatch):
 
     assert exit_code == 42
     assert captured["argv"] == ["--demo"]
+
+
+def test_main_schedule_delegates_to_scheduler(monkeypatch, tmp_path):
+    captured: dict[str, object] = {}
+
+    def fake_parse(spec):
+        captured["spec"] = spec
+        return ["parsed"]
+
+    def fake_run_schedule(params, times, timezone=None, runs=None):
+        captured["params"] = params
+        captured["times"] = times
+        captured["timezone"] = timezone
+        captured["runs"] = runs
+        return 17
+
+    monkeypatch.setattr(cli.scheduler, "parse_schedule", fake_parse)
+    monkeypatch.setattr(cli.scheduler, "run_schedule", fake_run_schedule)
+
+    config_path = _write_dummy_config(tmp_path)
+    monkeypatch.setenv("PREMARKET_CONFIG_PATH", str(config_path))
+    monkeypatch.setenv("PREMARKET_SCHEDULE", "07:45")
+    monkeypatch.setenv("PREMARKET_SCHEDULE_RUNS", "3")
+
+    exit_code = cli.main([])
+
+    assert exit_code == 17
+    assert captured["spec"] == "07:45"
+    assert captured["times"] == ["parsed"]
+    assert captured["timezone"] == cli.utils.DEFAULT_TZ_NAME
+    assert captured["runs"] == 3
 

@@ -11,6 +11,7 @@ from typing import Optional
 from dateutil import tz
 
 from . import orchestrate
+from . import scheduler
 from . import utils
 
 _BOOL_TRUE = {"1", "true", "yes", "y", "on"}
@@ -73,6 +74,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-per-sector", type=float, help="Override PREMARKET_MAX_PER_SECTOR")
     parser.add_argument("--fail-on-empty", help="Override PREMARKET_FAIL_ON_EMPTY (true/false)")
     parser.add_argument("--env-file", help="Path to .env file", default=".env")
+    parser.add_argument(
+        "--schedule",
+        help="Comma separated HH:MM entries describing when to run the workflow",
+    )
+    parser.add_argument(
+        "--schedule-runs",
+        type=int,
+        help="Limit how many scheduled runs to execute before exiting",
+    )
     return parser
 
 
@@ -199,16 +209,30 @@ def main(argv: Optional[list[str]] = None) -> int:
         fail_on_empty = cli_fail
         overrides.add("PREMARKET_FAIL_ON_EMPTY")
 
-    watchlist_db_path: Optional[Path] = None
-    watchlist_db_env = utils.env_str("PREMARKET_SHARED_DB")
-    if watchlist_db_env is not None:
-        watchlist_db_path = Path(watchlist_db_env)
-        overrides.add("PREMARKET_SHARED_DB")
+    schedule_spec = None
+    schedule_env = utils.env_str("PREMARKET_SCHEDULE")
+    if schedule_env is not None:
+        schedule_spec = schedule_env
+        overrides.add("PREMARKET_SCHEDULE")
+    if args.schedule:
+        schedule_spec = args.schedule
+        overrides.add("PREMARKET_SCHEDULE")
+
+    schedule_runs = None
+    schedule_runs_env = utils.env_str("PREMARKET_SCHEDULE_RUNS")
+    if schedule_runs_env is not None:
+        try:
+            schedule_runs = int(schedule_runs_env)
+        except ValueError as exc:
+            raise SystemExit("PREMARKET_SCHEDULE_RUNS must be an integer") from exc
+        overrides.add("PREMARKET_SCHEDULE_RUNS")
+    if args.schedule_runs is not None:
+        schedule_runs = args.schedule_runs
+        overrides.add("PREMARKET_SCHEDULE_RUNS")
 
     params = orchestrate.RunParams(
         config_path=Path(config_value),
         output_base_dir=output_base,
-        watchlist_db_path=watchlist_db_path,
         top_n=top_n,
         use_cache=use_cache,
         news_override=news_override,
@@ -219,6 +243,18 @@ def main(argv: Optional[list[str]] = None) -> int:
         max_per_sector=max_per_sector,
         env_overrides=sorted(overrides),
     )
+
+    if schedule_spec:
+        try:
+            schedule_times = scheduler.parse_schedule(schedule_spec)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        return scheduler.run_schedule(
+            params,
+            schedule_times,
+            timezone=timezone,
+            runs=schedule_runs,
+        )
 
     return orchestrate.run(params)
 

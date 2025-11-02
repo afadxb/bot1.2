@@ -3,7 +3,7 @@ premarket:
   price_max: 500
   avg_vol_min: 10
   rel_vol_min: 0
-  float_min: 100
+  float_min: 0
   earnings_exclude_window_days: 1
   max_per_sector: 0.4
   top_n: 20
