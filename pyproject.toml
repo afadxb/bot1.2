@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "premarket"
-version = "0.1.0"
-description = "Pre-market Top-N watchlist generator"
+name = "steadyalpha-screener"
+version = "0.2.0"
+description = "SteadyAlpha Screener Bot for pre-market Top-N watchlists"
 requires-python = ">=3.11"
 authors = [{name="Quant Agent"}]
 dependencies = [
@@ -16,7 +16,10 @@ dependencies = [
   "pydantic",
   "PyYAML",
   "tenacity",
-  "rich"
+  "rich",
+  "APScheduler",
+  "mysql-connector-python",
+  "ulid-py"
 ]
 
 [project.optional-dependencies]
@@ -26,7 +29,7 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["premarket"]
+packages = ["premarket", "steadyalpha", "steadyalpha.common", "steadyalpha.storage", "bots", "bots.screener"]
 
 [tool.pytest.ini_options]
 addopts = ""
