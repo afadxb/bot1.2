@@ -1,113 +1,100 @@
-# Premarket Top-N Watchlist
+# SteadyAlpha Screener Bot
 
-A lightweight Python 3.11 project that pulls a Finviz Elite export, applies deterministic filters and scoring, and produces a ranked pre-market Top-N watchlist.
+The SteadyAlpha Screener Bot ingests Finviz Elite pre-market exports, normalises
+and scores equities with the existing Top-N ranking pipeline, and publishes
+results to a shared MySQL database. Optional CSV and JSON artifacts are still
+produced for ad-hoc review, but downstream automation should consume the MySQL
+`candidates` table.
 
-## Quickstart
+## Features
 
-1. Copy the sample environment file and populate your values:
-
-```bash
-cp .env.example .env
-# edit .env to add your Finviz export URL and optional overrides
-```
-
-2. Install dependencies:
-
-```bash
-pip install -e .[dev]
-```
-
-3. Execute the workflow:
-
-```bash
-python -m premarket
-```
-
-When you need a traditional script entry point (for IDE debuggers, for example),
-invoke the mirrored wrapper instead:
-
-```bash
-python premarket_script.py
-```
-
-CLI flags are optional—any provided values override `.env` settings.
-
-On success, the following files appear under `PREMARKET_OUT_DIR/<YYYY-MM-DD>`:
-
-- `full_watchlist.json`: detailed data with features, scores, and tags.
-- `topN.json`: compact ranking summary for automation.
-- `watchlist.csv`: human-friendly table for quick review.
-- `run_summary.json`: structured metrics, timings, and notes.
-
-Raw CSV exports are stored under `data/raw/<date>/finviz_elite.csv`.
+- Finviz Elite ingest with cached CSV reuse.
+- Deterministic filters, feature engineering, scoring, and sector diversification
+  inherited from the original pre-market bot.
+- APScheduler driven pre-market cadence (default 08:30–09:15 ET).
+- MySQL persistence with idempotent migrations and a pooled connection.
+- Optional CSV/JSON artifacts under `data/watchlists/<YYYY-MM-DD>` for manual
+  inspection.
+- Pushover summary notifications after each run.
 
 ## Configuration
 
-Strategy defaults live in `config/strategy.yaml`. Tune the thresholds and weights to match your risk tolerance. Fields are validated via Pydantic and include:
-
-- Hard filters (`price_min`, `avg_vol_min`, `earnings_exclude_window_days`, etc.).
-- Feature weights and penalty caps.
-- Sector diversification ratio (`max_per_sector`).
-- Optional news settings (disabled by default).
-
-Enabling the news feature (`news.enabled=true`) lets the ranker incorporate
-headline freshness. Provide a Finviz Elite news export URL (`FINVIZ_NEWS_EXPORT_URL`)
-and/or a Finnhub API token (`FINNHUB_API_KEY`). Finviz is queried once for all
-symbols via the CSV export, while Finnhub provides per-symbol stories using the
-free `company-news` endpoint. The fresher headline between both providers is
-used to score each ticker.
-
-Override the Top-N size via `.env` (`PREMARKET_TOP_N`) or edit `premarket.top_n` in the config.
-
-### `.env` example
+All configuration is sourced from `.env` using `pydantic.BaseSettings`. Copy
+`.env.example` and populate the required fields:
 
 ```dotenv
-# Required Finviz export URL (auth token is automatically redacted in logs)
-FINVIZ_EXPORT_URL="https://elite.finviz.com/export.ashx?...&auth=..."
+# Core runtime
+TZ="America/New_York"
+FINVIZ_EXPORT_URL="https://elite.finviz.com/export.ashx?..."
+TOP_N=40
+MIN_GAP_PCT=2.0
+MIN_PM_VOL=200000
 
-# Optional news integrations
-# Provide the Finviz Elite news export URL (news_export.ashx) with your auth token
-FINVIZ_NEWS_EXPORT_URL="https://elite.finviz.com/news_export.ashx?v=3&auth=..."
-# Supply your free Finnhub token to augment symbol-specific news lookups
-FINNHUB_API_KEY="your-finnhub-token"
+# MySQL target
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=screener
+DB_PASS=secret
+DB_NAME=steadyalpha
 
-# Runtime overrides (all optional)
-PREMARKET_CONFIG_PATH="config/strategy.yaml"
-PREMARKET_OUT_DIR="data/watchlists"      # YYYY-MM-DD is auto-appended
-PREMARKET_TOP_N=20                        # override YAML top_n
-PREMARKET_USE_CACHE=true                  # allow fallback to cached CSV if download fails
-PREMARKET_NEWS_ENABLED=false              # force news probe on/off
-PREMARKET_MAX_PER_SECTOR=0.4              # optional sector cap override
-PREMARKET_LOG_FILE="logs/premarket.log"  # defaults to logs/premarket_<date>.log
-PREMARKET_DATE=2025-10-01                 # backfill run date (timezone aware)
-PREMARKET_FAIL_ON_EMPTY=false             # return success even if no rows qualify
-PREMARKET_TZ="America/New_York"          # timezone for scheduling & logging
-PREMARKET_SCHEDULE="07:30,08:45"         # optional daily run times (HH:MM[,HH:MM...])
-PREMARKET_SCHEDULE_RUNS=1                # limit scheduled executions (optional)
+# Scheduler window
+JOB_SCREENER_PM_START="08:30"
+JOB_SCREENER_PM_END="09:15"
+JOB_SCREENER_PM_EVERY_MIN=5
+
+# Optional notifications
+PUSHOVER_USER_KEY="..."
+PUSHOVER_API_TOKEN="..."
 ```
 
-## Testing
+`config/strategy.yaml` retains all scoring weights, penalties, filters, and
+sector caps. Adjust the YAML to tune the screener behaviour; the values are
+combined with the `.env` settings at runtime.
 
-Run unit tests with coverage:
+## Running locally
+
+Install dependencies and execute a single scan:
+
+```bash
+pip install -e .[dev]
+python -m premarket  # legacy entry point that now delegates to the screener
+```
+
+To run continuously, launch the scheduler:
+
+```bash
+python -m steadyalpha.app
+```
+
+The scheduler respects the configured window (`JOB_SCREENER_PM_START`–
+`JOB_SCREENER_PM_END`) and interval (`JOB_SCREENER_PM_EVERY_MIN`). Jobs outside
+the window are skipped.
+
+## MySQL schema
+
+Migrations ensure the following tables exist:
+
+- `schema_version(version INT PRIMARY KEY, applied_at DATETIME)`
+- `run_summary(run_id VARCHAR(26) PRIMARY KEY, started_at DATETIME, finished_at DATETIME, notes VARCHAR(255))`
+- `candidates(run_id VARCHAR(26), symbol VARCHAR(16), gap_pct DECIMAL(8,3), pre_mkt_vol INT,
+  catalyst_flag TINYINT, pm_high DECIMAL(16,6), pm_low DECIMAL(16,6), prev_high DECIMAL(16,6),
+  prev_low DECIMAL(16,6), pm_vwap DECIMAL(16,6), tags VARCHAR(255), created_at DATETIME,
+  PRIMARY KEY(run_id, symbol), KEY idx_symbol(symbol))`
+
+Each screener run inserts a ULID-based `run_id`, all ranked candidates, and the
+run summary metadata. Re-running the screener for the same `run_id` is safe due
+to `ON DUPLICATE KEY UPDATE` semantics.
+
+## Notifications
+
+Set `PUSHOVER_USER_KEY` and `PUSHOVER_API_TOKEN` to receive a succinct Pushover
+message after each run, e.g. `Screener TopN: AAPL, MSFT, NVDA … (N=40)`.
+
+## Testing
 
 ```bash
 pytest -q
 ```
 
-Coverage reports target ≥90% for core modules.
-
-## Troubleshooting
-
-| Exit code | Meaning | Common fixes |
-|-----------|---------|--------------|
-| `0` | Success (check `row_counts.topN` in `run_summary.json` to see how many symbols qualified). | No action required. If `topN` is zero, relax filters or keep `PREMARKET_FAIL_ON_EMPTY=false` to treat empty runs as expected. |
-| `2` | No symbols met the filters or were trimmed by sector caps. | Review `run_summary.json` (`row_counts`, `sector_cap_applied`) and adjust thresholds or caps. Ensure `PREMARKET_MAX_PER_SECTOR` is not overly restrictive. |
-| `3` | Failed to download or authenticate the Finviz export. | Verify `FINVIZ_EXPORT_URL` (token still valid), network connectivity, or run with `PREMARKET_USE_CACHE=true` to reuse cached data. |
-
-## Logging & Observability
-
-- Logs are written with Rich formatting, and the Finviz URL is redacted to host + query keys (with `auth=` masked).
-- `run_summary.json` records `env_overrides_used`, `weights_version`, `csv_hash`, `row_counts`, `used_cached_csv`, `sector_cap_applied`, and `week52_warning_count` for easier auditing.
-- `watchlist.csv` includes a `Why` column plus `TopFeature1`–`TopFeature5` showing the primary drivers behind each pick.
-- The console summary prints a single line containing date, requested Top-N, tier counts, sector-cap status, cache usage, and output path.
-
+Tests mock the MySQL layer to verify migrations and the end-to-end screener
+service without requiring a live database.
