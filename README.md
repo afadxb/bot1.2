@@ -4,7 +4,7 @@ The SteadyAlpha Screener Bot ingests Finviz Elite pre-market exports, normalises
 and scores equities with the existing Top-N ranking pipeline, and publishes
 results to a shared MySQL database. Optional CSV and JSON artifacts are still
 produced for ad-hoc review, but downstream automation should consume the MySQL
-`candidates` table.
+`shortlists` table.
 
 ## Features
 
@@ -76,14 +76,13 @@ Migrations ensure the following tables exist:
 
 - `schema_version(version INT PRIMARY KEY, applied_at DATETIME)`
 - `run_summary(run_id VARCHAR(26) PRIMARY KEY, started_at DATETIME, finished_at DATETIME, notes VARCHAR(255))`
-- `candidates(run_id VARCHAR(26), symbol VARCHAR(16), gap_pct DECIMAL(8,3), pre_mkt_vol INT,
-  catalyst_flag TINYINT, pm_high DECIMAL(16,6), pm_low DECIMAL(16,6), prev_high DECIMAL(16,6),
-  prev_low DECIMAL(16,6), pm_vwap DECIMAL(16,6), tags VARCHAR(255), created_at DATETIME,
-  PRIMARY KEY(run_id, symbol), KEY idx_symbol(symbol))`
+- `shortlists(id INT AUTO_INCREMENT PRIMARY KEY, run_date DATE, symbol_id INT, liquidity_score FLOAT,
+  price FLOAT, average_volume FLOAT, created_at DATETIME, UNIQUE KEY uq_shortlist_symbol_date(run_date, symbol_id),
+  KEY idx_run_date(run_date))`
 
-Each screener run inserts a ULID-based `run_id`, all ranked candidates, and the
-run summary metadata. Re-running the screener for the same `run_id` is safe due
-to `ON DUPLICATE KEY UPDATE` semantics.
+Each screener run inserts a ULID-based `run_id`, all ranked shortlist entries,
+and the run summary metadata. Re-running the screener for the same run day is
+safe due to `ON DUPLICATE KEY UPDATE` semantics on `(run_date, symbol_id)`.
 
 ## Notifications
 

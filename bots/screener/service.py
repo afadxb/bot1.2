@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Iterable, Optional
 
 import pandas as pd
 import yaml
@@ -244,35 +244,44 @@ def _create_output_dir(run_date: date) -> Path:
     return output_dir
 
 
-def _compute_catalyst(tags: list[str], news_score: float) -> int:
-    if news_score and news_score > 0:
-        return 1
-    catalyst_tags = {"EARNINGS_TODAY", "FIFTY_TWO_WEEK_BREAKOUT", "EXTREME_GAP"}
-    return 1 if any(tag in catalyst_tags for tag in tags) else 0
-
-
 def _extract_numeric(row: dict[str, object], key: str) -> Optional[float]:
     value = row.get(key)
-    if value is None:
+    numeric = utils.safe_float(value)
+    if numeric is None:
         return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
+    return float(numeric)
 
 
-def _extract_int(row: dict[str, object], key: str) -> int:
-    value = row.get(key)
-    if value is None:
-        return 0
-    if isinstance(value, (int, float)):
-        return int(value)
-    try:
-        return int(float(value))
-    except (TypeError, ValueError):
-        return 0
+def _unique_symbols(rows: Iterable[dict[str, object]]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for row in rows:
+        symbol = row.get("ticker")
+        if not symbol:
+            continue
+        symbol_str = str(symbol)
+        if symbol_str in seen:
+            continue
+        seen.add(symbol_str)
+        ordered.append(symbol_str)
+    return ordered
+
+
+def _fetch_symbol_ids(cursor, symbols: list[str]) -> dict[str, int]:
+    if not symbols:
+        return {}
+    placeholders = ", ".join(["%s"] * len(symbols))
+    cursor.execute(
+        f"SELECT symbol, id FROM securities WHERE symbol IN ({placeholders})",
+        tuple(symbols),
+    )
+    mapping: dict[str, int] = {}
+    for symbol, identifier in cursor.fetchall():
+        try:
+            mapping[str(symbol)] = int(identifier)
+        except (TypeError, ValueError):
+            continue
+    return mapping
 
 
 def premarket_scan() -> PipelineContext:
@@ -518,48 +527,61 @@ def _persist_mysql(context: PipelineContext) -> None:
                     json.dumps(context.notes)[:255],
                 ),
             )
-            candidate_rows = []
-            for row in context.diversified_df.to_dict(orient="records"):
-                tags = row.get("tags", []) or []
-                if not isinstance(tags, list):
-                    tags = [str(tags)]
-                news_score = float(row.get("news_fresh_score", 0.0) or 0.0)
-                candidate_rows.append(
+            diversified_rows = context.diversified_df.to_dict(orient="records")
+            symbols = _unique_symbols(diversified_rows)
+            symbol_ids = _fetch_symbol_ids(cursor, symbols)
+            missing_symbols = [s for s in symbols if s not in symbol_ids]
+            if missing_symbols:
+                LOGGER.warning(
+                    "Skipping shortlist persistence for symbols missing securities.id: %s",
+                    ", ".join(sorted(missing_symbols)),
+                )
+
+            shortlist_rows = []
+            generated_at = datetime.fromisoformat(context.generated_at)
+            if generated_at.tzinfo is not None:
+                generated_at = generated_at.astimezone(timezone.utc).replace(tzinfo=None)
+            for row in diversified_rows:
+                ticker = row.get("ticker")
+                if not ticker:
+                    continue
+                symbol_id = symbol_ids.get(str(ticker))
+                if symbol_id is None:
+                    continue
+                price_value = _extract_numeric(row, "price")
+                average_volume_value = _extract_numeric(row, "average_volume")
+                if average_volume_value is None:
+                    average_volume_value = _extract_numeric(row, "avg_volume_3m")
+                if price_value is not None and average_volume_value is not None:
+                    liquidity_value = price_value * average_volume_value
+                else:
+                    liquidity_value = row.get("liquidity_score")
+                    if liquidity_value is None:
+                        liquidity_value = row.get("score", 0.0)
+                shortlist_rows.append(
                     (
-                        context.run_id,
-                        row.get("ticker"),
-                        float(row.get("gap_pct", 0.0) or 0.0),
-                        _extract_int(row, "volume"),
-                        _compute_catalyst(list(tags), news_score),
-                        _extract_numeric(row, "pm_high"),
-                        _extract_numeric(row, "pm_low"),
-                        _extract_numeric(row, "prev_high"),
-                        _extract_numeric(row, "prev_low"),
-                        _extract_numeric(row, "pm_vwap"),
-                        "|".join(tags),
-                        context.generated_at,
+                        context.run_date,
+                        symbol_id,
+                        float(liquidity_value or 0.0),
+                        price_value,
+                        average_volume_value,
+                        generated_at,
                     )
                 )
-            cursor.executemany(
-                """
-                INSERT INTO candidates (
-                    run_id, symbol, gap_pct, pre_mkt_vol, catalyst_flag,
-                    pm_high, pm_low, prev_high, prev_low, pm_vwap, tags, created_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON DUPLICATE KEY UPDATE
-                    gap_pct = VALUES(gap_pct),
-                    pre_mkt_vol = VALUES(pre_mkt_vol),
-                    catalyst_flag = VALUES(catalyst_flag),
-                    pm_high = VALUES(pm_high),
-                    pm_low = VALUES(pm_low),
-                    prev_high = VALUES(prev_high),
-                    prev_low = VALUES(prev_low),
-                    pm_vwap = VALUES(pm_vwap),
-                    tags = VALUES(tags),
-                    created_at = VALUES(created_at)
-                """,
-                candidate_rows,
-            )
+            if shortlist_rows:
+                cursor.executemany(
+                    """
+                    INSERT INTO shortlists (
+                        run_date, symbol_id, liquidity_score, price, average_volume, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        liquidity_score = VALUES(liquidity_score),
+                        price = VALUES(price),
+                        average_volume = VALUES(average_volume),
+                        created_at = VALUES(created_at)
+                    """,
+                    shortlist_rows,
+                )
         conn.commit()
     finally:
         conn.close()

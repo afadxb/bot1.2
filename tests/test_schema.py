@@ -6,27 +6,22 @@ def test_migrations_are_idempotent(fake_connection):
     apply_migrations(fake_connection)
 
     assert "run_summary" in fake_connection.tables
-    assert "candidates" in fake_connection.tables
+    assert "shortlists" in fake_connection.tables
 
-    candidate_columns = fake_connection.tables["candidates"]
+    shortlist_columns = fake_connection.tables["shortlists"]
     for column in {
-        "run_id",
-        "symbol",
-        "gap_pct",
-        "pre_mkt_vol",
-        "catalyst_flag",
-        "pm_high",
-        "pm_low",
-        "prev_high",
-        "prev_low",
-        "pm_vwap",
-        "tags",
+        "id",
+        "run_date",
+        "symbol_id",
+        "liquidity_score",
+        "price",
+        "average_volume",
         "created_at",
     }:
-        assert column in candidate_columns
+        assert column in shortlist_columns
 
     summary_columns = fake_connection.tables["run_summary"]
     assert {"run_id", "started_at", "finished_at", "notes"}.issubset(summary_columns)
 
     assert fake_connection.schema_versions == {SCHEMA_VERSION}
-    assert fake_connection.indexes["candidates"] == {"idx_symbol"}
+    assert fake_connection.indexes["shortlists"] == {"idx_run_date", "uq_shortlist_symbol_date"}
