@@ -15,7 +15,7 @@ except ImportError:  # pragma: no cover
 
 LOGGER = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _ensure_table(cursor, statement: str) -> None:
@@ -78,41 +78,37 @@ def apply_migrations(conn: MySQLConnection) -> None:
         _ensure_table(
             cursor,
             """
-            CREATE TABLE IF NOT EXISTS `candidates` (
-                `run_id` VARCHAR(26) NOT NULL,
-                `symbol` VARCHAR(16) NOT NULL,
-                `gap_pct` DECIMAL(8,3) NOT NULL,
-                `pre_mkt_vol` INT NOT NULL,
-                `catalyst_flag` TINYINT NOT NULL,
-                `pm_high` DECIMAL(16,6),
-                `pm_low` DECIMAL(16,6),
-                `prev_high` DECIMAL(16,6),
-                `prev_low` DECIMAL(16,6),
-                `pm_vwap` DECIMAL(16,6),
-                `tags` VARCHAR(255),
+            CREATE TABLE IF NOT EXISTS `shortlists` (
+                `id` INT AUTO_INCREMENT PRIMARY KEY,
+                `run_date` DATE NOT NULL,
+                `symbol_id` INT NOT NULL,
+                `liquidity_score` FLOAT NOT NULL,
+                `price` FLOAT,
+                `average_volume` FLOAT,
                 `created_at` DATETIME NOT NULL,
-                PRIMARY KEY (`run_id`, `symbol`)
+                UNIQUE KEY `uq_shortlist_symbol_date` (`run_date`, `symbol_id`),
+                CONSTRAINT `fk_shortlists_security`
+                    FOREIGN KEY (`symbol_id`) REFERENCES `securities` (`id`)
+                    ON DELETE CASCADE
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """,
         )
 
         _ensure_columns(
             cursor,
-            "candidates",
+            "shortlists",
             [
-                ("pm_high", "DECIMAL(16,6)"),
-                ("pm_low", "DECIMAL(16,6)"),
-                ("prev_high", "DECIMAL(16,6)"),
-                ("prev_low", "DECIMAL(16,6)"),
-                ("pm_vwap", "DECIMAL(16,6)"),
-                ("tags", "VARCHAR(255)"),
+                ("symbol_id", "INT NOT NULL"),
+                ("liquidity_score", "FLOAT NOT NULL"),
+                ("price", "FLOAT"),
+                ("average_volume", "FLOAT"),
             ],
         )
 
         _ensure_index(
             cursor,
-            "candidates",
-            "CREATE INDEX `idx_symbol` ON `candidates` (`symbol`)",
+            "shortlists",
+            "CREATE INDEX `idx_run_date` ON `shortlists` (`run_date`)",
         )
 
         cursor.execute("SELECT version FROM schema_version WHERE version = %s", (SCHEMA_VERSION,))

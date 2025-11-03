@@ -48,6 +48,14 @@ class FakeCursor:
             version = params[0] if params else None
             if version in self.connection.schema_versions:
                 self._results = [(version,)]
+        elif normalized.upper().startswith("SELECT SYMBOL, ID FROM SECURITIES"):
+            symbols = params or ()
+            results = []
+            for symbol in symbols:
+                identifier = self.connection.securities.get(symbol)
+                if identifier is not None:
+                    results.append((symbol, identifier))
+            self._results = results
         elif normalized.upper().startswith("INSERT INTO SCHEMA_VERSION"):
             if params:
                 self.connection.schema_versions.add(params[0])
@@ -61,6 +69,9 @@ class FakeCursor:
         if normalized.upper().startswith("INSERT INTO CANDIDATES"):
             for params in seq:
                 self.connection.candidates.append(tuple(params))
+        elif normalized.upper().startswith("INSERT INTO SHORTLISTS"):
+            for params in seq:
+                self.connection.shortlists.append(tuple(params))
         else:
             for params in seq:
                 self.connection.statements.append((normalized, tuple(params)))
@@ -83,6 +94,14 @@ class FakeCursor:
             col_match = re.match(r"`([^`]+)`", line)
             if col_match:
                 columns.add(col_match.group(1))
+                continue
+            unique_match = re.match(r"UNIQUE KEY `([^`]+)`", line, re.IGNORECASE)
+            if unique_match:
+                self.connection.indexes.setdefault(table, set()).add(unique_match.group(1))
+                continue
+            key_match = re.match(r"KEY `([^`]+)`", line, re.IGNORECASE)
+            if key_match:
+                self.connection.indexes.setdefault(table, set()).add(key_match.group(1))
         self.connection.tables[table] = columns
 
     def _handle_alter_table(self, query: str) -> None:
@@ -101,9 +120,11 @@ class FakeConnection:
         self.schema_versions: set[int] = set()
         self.run_summary: list[tuple[Any, ...]] = []
         self.candidates: list[tuple[Any, ...]] = []
+        self.shortlists: list[tuple[Any, ...]] = []
         self.statements: list[tuple[str, tuple[Any, ...]]] = []
         self.commits: int = 0
         self.closed: bool = False
+        self.securities: dict[str, int] = {}
 
     def cursor(self) -> FakeCursor:
         return FakeCursor(self)

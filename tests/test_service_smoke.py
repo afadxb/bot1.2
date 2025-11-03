@@ -1,5 +1,6 @@
 from datetime import datetime
 from pathlib import Path
+import math
 
 import pandas as pd
 from dateutil import tz
@@ -18,11 +19,11 @@ def _sample_csv(path: Path) -> None:
             "Country": "USA",
             "Market Cap": "1,500,000,000",
             "P/E": "25",
-            "Price": "25",
+            "Price": "$25.00",
             "Change": "5%",
             "Gap": "4%",
             "Volume": "500000",
-            "Average Volume (3m)": "2000000",
+            "Average Volume (3m)": "2.0M",
             "Relative Volume": "2.0",
             "Float": "50000000",
             "Float %": "38%",
@@ -44,11 +45,11 @@ def _sample_csv(path: Path) -> None:
             "Country": "USA",
             "Market Cap": "2,000,000,000",
             "P/E": "30",
-            "Price": "45",
+            "Price": "$45.50",
             "Change": "3%",
             "Gap": "2.5%",
             "Volume": "600000",
-            "Average Volume (3m)": "3000000",
+            "Average Volume (3m)": "3.5M",
             "Relative Volume": "1.6",
             "Float": "15000000",
             "Float %": "42%",
@@ -68,6 +69,8 @@ def _sample_csv(path: Path) -> None:
 def test_premarket_scan_smoke(monkeypatch, tmp_path, fake_connection):
     csv_path = tmp_path / "finviz.csv"
     _sample_csv(csv_path)
+
+    fake_connection.securities = {"AAA": 101, "BBB": 202}
 
     tzinfo = tz.gettz("America/New_York")
     fixed_now = datetime(2024, 1, 2, 8, 45, tzinfo=tzinfo)
@@ -106,7 +109,34 @@ def test_premarket_scan_smoke(monkeypatch, tmp_path, fake_connection):
 
     assert result.top_symbols
     assert fake_connection.run_summary
-    assert fake_connection.candidates
+    assert fake_connection.shortlists
     output_dir = Path("data/watchlists") / result.run_date.isoformat()
     assert (output_dir / "watchlist.csv").exists()
-    assert len(fake_connection.candidates) == len(result.top_symbols)
+    assert len(fake_connection.shortlists) == len(result.top_symbols)
+    stored_symbol_ids = {row[1] for row in fake_connection.shortlists}
+    assert stored_symbol_ids == {101, 202}
+    diversified = result.diversified_df.to_dict(orient="records")
+    rows_by_symbol = {row["ticker"]: row for row in diversified}
+    id_to_symbol = {identifier: symbol for symbol, identifier in fake_connection.securities.items()}
+    for run_date, symbol_id, liquidity_score, price, average_volume, _created_at in fake_connection.shortlists:
+        assert run_date == result.run_date
+        symbol = id_to_symbol[symbol_id]
+        shortlist_row = rows_by_symbol[symbol]
+        expected_price = shortlist_row.get("price")
+        expected_avg = (
+            shortlist_row.get("average_volume")
+            if shortlist_row.get("average_volume") is not None
+            else shortlist_row.get("avg_volume_3m")
+        )
+        if expected_price is not None:
+            assert price is not None
+            assert math.isclose(price, float(expected_price), rel_tol=1e-6)
+        if expected_avg is not None:
+            assert average_volume is not None
+            assert math.isclose(average_volume, float(expected_avg), rel_tol=1e-6)
+        if expected_price is not None and expected_avg is not None:
+            expected_score = float(expected_price) * float(expected_avg)
+        else:
+            fallback = shortlist_row.get("liquidity_score") or shortlist_row.get("score") or 0.0
+            expected_score = float(fallback)
+        assert math.isclose(liquidity_score, expected_score, rel_tol=1e-6)
