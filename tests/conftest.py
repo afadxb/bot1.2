@@ -56,6 +56,8 @@ class FakeCursor:
                 if identifier is not None:
                     results.append((symbol, identifier))
             self._results = results
+        elif normalized.upper().startswith("INSERT INTO SECURITIES"):
+            self._handle_insert_securities([params])
         elif normalized.upper().startswith("INSERT INTO SCHEMA_VERSION"):
             if params:
                 self.connection.schema_versions.add(params[0])
@@ -72,6 +74,9 @@ class FakeCursor:
         elif normalized.upper().startswith("INSERT INTO SHORTLISTS"):
             for params in seq:
                 self.connection.shortlists.append(tuple(params))
+        elif normalized.upper().startswith("INSERT INTO SECURITIES"):
+            rows = [tuple(params) for params in seq]
+            self._handle_insert_securities(rows)
         else:
             for params in seq:
                 self.connection.statements.append((normalized, tuple(params)))
@@ -112,6 +117,23 @@ class FakeCursor:
         column = match.group(2).strip("`")
         self.connection.tables.setdefault(table, set()).add(column)
 
+    def _handle_insert_securities(self, rows: Iterable[Iterable[Any]]) -> None:
+        next_id = max(self.connection.securities.values(), default=0)
+        for params in rows:
+            values = tuple(params)
+            if not values:
+                continue
+            symbol = str(values[0])
+            name = values[1] if len(values) > 1 else None
+            sector = values[2] if len(values) > 2 else None
+            if symbol not in self.connection.securities:
+                next_id += 1
+                self.connection.securities[symbol] = next_id
+            self.connection.security_metadata[symbol] = {
+                "name": name,
+                "sector": sector,
+            }
+
 
 class FakeConnection:
     def __init__(self) -> None:
@@ -125,6 +147,7 @@ class FakeConnection:
         self.commits: int = 0
         self.closed: bool = False
         self.securities: dict[str, int] = {}
+        self.security_metadata: dict[str, dict[str, Any]] = {}
 
     def cursor(self) -> FakeCursor:
         return FakeCursor(self)
