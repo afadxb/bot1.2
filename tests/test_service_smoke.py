@@ -71,6 +71,10 @@ def test_premarket_scan_smoke(monkeypatch, tmp_path, fake_connection):
     _sample_csv(csv_path)
 
     fake_connection.securities = {"AAA": 101, "BBB": 202}
+    fake_connection.security_metadata = {
+        "AAA": {"name": "Legacy", "sector": "Old"},
+        "BBB": {"name": "Beta", "sector": "Healthcare"},
+    }
 
     tzinfo = tz.gettz("America/New_York")
     fixed_now = datetime(2024, 1, 2, 8, 45, tzinfo=tzinfo)
@@ -115,6 +119,10 @@ def test_premarket_scan_smoke(monkeypatch, tmp_path, fake_connection):
     assert len(fake_connection.shortlists) == len(result.top_symbols)
     stored_symbol_ids = {row[1] for row in fake_connection.shortlists}
     assert stored_symbol_ids == {101, 202}
+    assert fake_connection.security_metadata["AAA"]["name"] == "Alpha"
+    assert fake_connection.security_metadata["AAA"]["sector"] == "Technology"
+    assert fake_connection.security_metadata["BBB"]["name"] == "Beta"
+    assert fake_connection.security_metadata["BBB"]["sector"] == "Healthcare"
     diversified = result.diversified_df.to_dict(orient="records")
     rows_by_symbol = {row["ticker"]: row for row in diversified}
     id_to_symbol = {identifier: symbol for symbol, identifier in fake_connection.securities.items()}

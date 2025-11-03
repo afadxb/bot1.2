@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import json
 import logging
 import time
@@ -242,6 +243,17 @@ def _create_output_dir(run_date: date) -> Path:
     output_dir = base_dir / run_date.isoformat()
     utils.ensure_directory(output_dir)
     return output_dir
+
+
+def _clean_metadata_value(value: object) -> Optional[str]:
+    """Return a clean string for metadata fields or ``None`` when absent."""
+
+    if value is None:
+        return None
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _extract_numeric(row: dict[str, object], key: str) -> Optional[float]:
@@ -529,6 +541,40 @@ def _persist_mysql(context: PipelineContext) -> None:
             )
             diversified_rows = context.diversified_df.to_dict(orient="records")
             symbols = _unique_symbols(diversified_rows)
+
+            metadata_map: dict[str, tuple[Optional[str], Optional[str]]] = {}
+            for row in diversified_rows:
+                ticker = row.get("ticker")
+                if not ticker:
+                    continue
+                symbol = str(ticker)
+                company = _clean_metadata_value(row.get("company"))
+                sector = _clean_metadata_value(row.get("sector"))
+                if symbol in metadata_map:
+                    prev_company, prev_sector = metadata_map[symbol]
+                    if company is None:
+                        company = prev_company
+                    if sector is None:
+                        sector = prev_sector
+                metadata_map[symbol] = (company, sector)
+
+            if metadata_map and symbols:
+                security_rows = []
+                for symbol in symbols:
+                    company, sector = metadata_map.get(symbol, (None, None))
+                    security_rows.append((symbol, company, sector))
+                if security_rows:
+                    cursor.executemany(
+                        """
+                        INSERT INTO securities (symbol, name, sector)
+                        VALUES (%s, %s, %s)
+                        ON DUPLICATE KEY UPDATE
+                            name = VALUES(name),
+                            sector = VALUES(sector)
+                        """,
+                        security_rows,
+                    )
+
             symbol_ids = _fetch_symbol_ids(cursor, symbols)
             missing_symbols = [s for s in symbols if s not in symbol_ids]
             if missing_symbols:
